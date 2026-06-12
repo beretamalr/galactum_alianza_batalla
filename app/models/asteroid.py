@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime
 from typing import Optional
 from sqlalchemy import Boolean
+from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
 class Asteroid(Base):
@@ -37,7 +38,12 @@ class Asteroid(Base):
     # --- AGREGADOS PARA EL BLOQUEO DE MINADO ---
 
     # Quién lo está minando actualmente
-    mined_by_id: Mapped[Optional[str]] = mapped_column("mined_by_id", String, ForeignKey("users.id"), nullable=True)
+    mined_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        "mined_by_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=True
+    )
 
     # Cuándo termina el minado
     mining_finish_at: Mapped[Optional[datetime]] = mapped_column("mining_finish_at", DateTime, nullable=True)
