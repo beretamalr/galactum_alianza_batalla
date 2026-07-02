@@ -13,12 +13,12 @@ def get_alliances(db: Session, search: str | None = None):
 
 def create_alliance(db: Session, alliance_data: AlianzaCrearPeticion, current_user: User):
     # 1. Validación: Verificar que el nombre de la alianza no esté tomado
-    existing_alliance = db.query(Alliance).filter(Alliance.name.ilike(alliance_data.nombre)).first()
+    existing_alliance = db.query(Alliance).filter(Alliance.name.ilike(f"%{alliance_data.nombre}%")).first()
     if existing_alliance:
         raise ValueError("El nombre de la alianza ya está registrado por otra corporación.")
 
     # 2. Validación: Verificar que el tag no esté repetido
-    existing_tag = db.query(Alliance).filter(Alliance.tag.ilike(alliance_data.tag)).first()
+    existing_tag = db.query(Alliance).filter(Alliance.tag.ilike(f"%{alliance_data.tag}%")).first()
     if existing_tag:
         raise ValueError("El TAG de la alianza ya está siendo usado.")
 
@@ -53,3 +53,23 @@ def create_alliance(db: Session, alliance_data: AlianzaCrearPeticion, current_us
     except Exception as e:
         db.rollback()
         raise e
+
+
+def join_alliance(db: Session, alliance_id: int, current_user: User):
+    if not current_user.jugador:
+        raise ValueError("El usuario no tiene un jugador asociado.")
+
+    alliance = db.query(Alliance).filter(Alliance.id == alliance_id).first()
+    if not alliance:
+        raise ValueError("La alianza no existe.")
+
+    if current_user.jugador.alliance_id is not None:
+        if current_user.jugador.alliance_id == alliance_id:
+            return alliance
+        raise ValueError("Ya perteneces a una alianza. Debes abandonarla antes de unirte a otra.")
+
+    alliance.members_count = (alliance.members_count or 0) + 1
+    current_user.jugador.alliance_id = alliance.id
+    db.commit()
+    db.refresh(alliance)
+    return alliance

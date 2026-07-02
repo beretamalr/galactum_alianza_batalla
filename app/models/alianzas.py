@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, func
 from app.db.base import Base  # O como importes tu Base de SQLAlchemy
+from sqlalchemy.orm import relationship
 
 class Alliance(Base):
     __tablename__ = "alliances"
@@ -14,3 +15,5 @@ class Alliance(Base):
     lang = Column(String, default="ES")
     puntos_prestigio = Column(Integer, default=0)
     created_at = Column(DateTime, server_default=func.now())
+
+    members = relationship("Jugador", back_populates="alliance")

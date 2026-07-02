@@ -11,6 +11,7 @@ from app.api.routes.crafting import router as crafting_router
 from app.api.routes.mining import router as mining_router
 from app.api.routes.map import router as map_router       
 from app.api.routes.recursos import router as recursos_router  
+from app.api.routes.demo import router as demo_router
 
 api_router = APIRouter()
 
@@ -25,3 +26,4 @@ api_router.include_router(crafting_router)
 api_router.include_router(mining_router) 
 api_router.include_router(map_router)
 api_router.include_router(recursos_router)
+api_router.include_router(demo_router)
