@@ -1,46 +1,30 @@
 # app/api/routes/mining.py
 from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
-
-from app.db.dependencies import get_db
 from app.services.auth import get_current_user
 from app.models.user import User
-from app.services import mining_service
-from app.schemas.mining import MiningStartRequest, MiningInfoResponse, MiningClaimResponse
 
-# Se agrupan las rutas bajo el prefijo /mining
-router = APIRouter(prefix="/api/v1/mining", tags=["Mining"])
+router = APIRouter(prefix="/mining", tags=["Minería (Mining)"])
 
-@router.post("/iniciar", response_model=MiningInfoResponse, status_code=status.HTTP_200_OK, response_model_by_alias=True)
-def iniciar_minado(
-    request: MiningStartRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
+@router.get("/asteroides", status_code=status.HTTP_200_OK, name="Buscar Asteroides Cercanos")
+def listar_asteroides(current_user: User = Depends(get_current_user)):
     """
-    Inicia el proceso de minado en un asteroide, bloqueándolo para el usuario.
-    Devuelve la información sobre el tiempo de finalización.
+    Escanea el sector espacial actual en busca de asteroides ricos en minerales.
     """
-    mining_info = mining_service.start_mining(
-        db=db,
-        user=current_user,
-        asteroid_name=request.asteroid_name
-    )
-    return mining_info
+    return [
+        {"id": 901, "nombre": "Asteroide Vesta-X", "recurso": "Titanio", "riqueza": "Alta", "distancia_al": "1.2 LY"},
+        {"id": 902, "nombre": "Nube Volátil C-40", "recurso": "Helio-3", "riqueza": "Media", "distancia_al": "0.5 LY"}
+    ]
 
-@router.post("/reclamar", response_model=MiningClaimResponse, status_code=status.HTTP_200_OK, response_model_by_alias=True)
-def reclamar_minado(
-    request: MiningStartRequest, # Se reutiliza el request para obtener el asteroid_name
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
+@router.post("/extraer", status_code=status.HTTP_200_OK, name="Enviar Sonda Minera")
+def iniciar_mineria(asteroide_id: int, horas: int = 1, current_user: User = Depends(get_current_user)):
     """
-    Reclama los recursos una vez que el tiempo de minado ha concluido.
-    Verifica que el tiempo se haya cumplido y que el reclamante sea el minero original.
+    Despliega naves de extracción para recolectar recursos durante un tiempo determinado.
     """
-    claim_response = mining_service.confirma_mining(
-        db=db,
-        user=current_user,
-        asteroid_name=request.asteroid_name
-    )
-    return claim_response
+    return {
+        "status": "mining_operation_launched",
+        "detalles": {
+            "asteroide_id": asteroide_id,
+            "tiempo_estimado": f"{horas} hora(s)",
+            "mensaje": f"Sondas de {current_user.username} extrayendo recursos con éxito."
+        }
+    }

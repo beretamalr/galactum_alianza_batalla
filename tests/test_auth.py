@@ -6,6 +6,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.db.dependencies import get_db
 from app.db.base import Base
+from app.models.asteroid import Asteroid
+from app.models.inventory import Inventory
+from app.models.jugador import Jugador
+from app.models.server import Server
+from app.models.ship_rooms import ShipRoom
+from app.models.ship import Ship
+from app.models.tripulante import Tripulante
 from app.models.user import User
 import pytest
 
@@ -44,6 +51,13 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def clear_users_table():
     db = TestingSessionLocal()
+    db.query(Tripulante).delete()
+    db.query(ShipRoom).delete()
+    db.query(Inventory).delete()
+    db.query(Asteroid).delete()
+    db.query(Ship).delete()
+    db.query(Server).delete()
+    db.query(Jugador).delete()
     db.query(User).delete()
     db.commit()
     db.close()

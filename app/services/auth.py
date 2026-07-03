@@ -1,79 +1,67 @@
 # app/services/auth.py
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
-# ⬇️ Cambiamos a HTTP Bearer (quitamos OAuth2PasswordBearer)
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.db.session import get_db
+from app.db.dependencies import get_db 
 from app.schemas.user import UserCreate
-from app.services import ship, ship_rooms_service, inventory_service # <-- ¡Importamos los servicios!
 
+# IMPORTACIONES DIRECTAS DE ARCHIVO
+from app.services import ship_rooms_service
+from app.services import inventory_service
+
+# 🌟 CORRECCIÓN DEFINITIVA: Importando desde app.models.user (tu archivo real)
 from app.models.user import User
 from app.models.jugador import Jugador
 
-
 settings = get_settings()
 
-# Hash de contraseñas con bcrypt
+# Configuración del hash de contraseñas con bcrypt
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# ⬇️ Esquema de autenticación tipo "Bearer <token>"
-bearer_scheme = HTTPBearer()  # auto_error=True por defecto: si falta el header, devuelve 401
+# Esquema de autenticación tipo "Bearer <token>"
+bearer_scheme = HTTPBearer() 
 
 
 def hash_password(password: str) -> str:
+    """Genera el hash seguro de la contraseña."""
     return pwd_context.hash(password)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    """Verifica si la contraseña coincide con el hash."""
     return pwd_context.verify(plain, hashed)
 
 
 def create_access_token(data: dict, minutes: int | None = None) -> str:
-    """
-    Genera un JWT con expiración.
-    Espera que en `data` venga, por ejemplo, {"sub": "<username|email>"}.
-    """
+    """Genera un token JWT con tiempo de expiración."""
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(
-        minutes=minutes or settings.ACCESS_TOKEN_EXPIRE_MINUTES
-    )
+    if minutes:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=getattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 60))
+    
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-
-
-def get_user_by_email(db: Session, email: str) -> User | None:
-    """
-    Busca un usuario por su email.
-    """
-    return db.execute(select(User).where(User.email == email)).scalars().first()
-
-
-def authenticate_user(db: Session, email: str, password: str) -> User | None:
-    """
-    Busca un usuario por email y verifica su contraseña.
-    Devuelve el objeto User si es exitoso, si no, None.
-    """
-    user = get_user_by_email(db, email)
-    if not user or not verify_password(password, user.password_hash):  # type: ignore
-        return None
-    return user
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return encoded_jwt
 
 
 def register_user(db: Session, payload: UserCreate) -> User:
     """
-    Handles the business logic of creating a new user, their associated ship,
-    player, and the initial ship rooms.
+    Maneja la lógica transaccional para registrar un nuevo usuario,
+    su entidad Jugador, sus salas iniciales de la nave y su inventario base.
     """
-    # 1. Preparación de datos
+    # 1. Verificar si el email o username ya existen para lanzar error temprano
+    existing_user = db.query(User).filter((User.email == payload.email) | (User.username == payload.username)).first()
+    if existing_user:
+        raise Exception("El email o el nombre de usuario ya se encuentran registrados.")
+
     password_hash = hash_password(payload.password)
     
-    # --- INICIO DE LA TRANSACCIÓN ---
     try:
         # 2. CREAR USUARIO (USER)
         new_user = User(
@@ -82,58 +70,58 @@ def register_user(db: Session, payload: UserCreate) -> User:
             password_hash=password_hash
         )
         db.add(new_user)
-        db.flush() # Necesario para obtener new_user.id
+        db.flush()  # Genera de forma segura el UUID en new_user.id
     
         # 3. CREAR JUGADOR (PLAYER)
-        # El jugador está ligado al ID del usuario (user_id = user.id)
         new_player = Jugador(
             user_id=new_user.id,
             nickname=payload.username
         )
         db.add(new_player)
-        db.flush() # ¡CORRECCIÓN! Es necesario para que la relación user.jugador se actualice en la sesión.
+        
+        # VÍNCULO EXPLÍCITO EN MEMORIA: 
+        new_user.jugador = new_player
+        db.flush()  # Genera el ID numérico del jugador
     
-        # --- ORQUESTACIÓN DE SERVICIOS ---
-
-        # 4. CREAR NAVE (SHIP) llamando al servicio correspondiente
-        # El servicio se encarga de la lógica de la posición aleatoria.
-        ship.create_initial_ship(db, user_id=str(new_user.id))
-
-        # 5. CREAR SALAS INICIALES (SHIP ROOMS) llamando al servicio
-        # Corrección: Pasamos el user_id, como espera la función corregida.
-        ship_rooms_service.crear_salas_iniciales(db, user_id=new_user.id) # type: ignore
-
-        # 6. CREAR INVENTARIO INICIAL (STARTER PACK)
-        inventory_service.crear_inventario_inicial(db, player_id=new_player.id)
-
-        # --- FIN DE LA ORQUESTACIÓN ---
-    
-        # 6. CONFIRMAR TRANSACCIÓN
+        # 4. ORQUESTACIÓN DE SUB-SERVICIOS INICIALES
+        ship_rooms_service.crear_salas_iniciales(db, user_id=new_user.id)
+        inventory_service.crear_inventario_inicial(db, player_id=int(new_player.id))
+        
+        # 5. CONFIRMAR TODO EN LA BASE DE DATOS (COMMIT)
         db.commit()
         db.refresh(new_user)
         
         return new_user
 
     except Exception as e:
-        # 7. REVERTIR TRANSACCIÓN en caso de error
+        # En caso de cualquier error intermedio, revertimos la transacción por completo
         db.rollback()
         raise e
 
 
+def authenticate_user(db: Session, email: str, password: str) -> User | None:
+    """Valida las credenciales de un usuario para el inicio de sesión."""
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        return None
+    if not verify_password(password, user.password_hash):
+        return None
+    return user
+
+
 def get_current_user(
     db: Session = Depends(get_db),
-    # ⬇️ En vez de token: str = Depends(oauth2_scheme)
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> User:
     """
-    Extrae el token del header Authorization: Bearer <token>,
-    lo valida y retorna el usuario autenticado.
+    Dependencia global de FastAPI para endpoints protegidos.
+    Extrae, decodifica el token Bearer JWT y retorna al usuario autenticado.
     """
-    token = credentials.credentials  # el valor del JWT sin la palabra 'Bearer'
+    token = credentials.credentials
 
     cred_exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Credenciales inválidas",
+        detail="Credenciales inválidas o token expirado",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
@@ -144,10 +132,10 @@ def get_current_user(
         if sub is None:
             raise cred_exc
     except JWTError:
-        # token inválido / expirado / mal firmado
         raise cred_exc
-
-    user = get_user_by_email(db, sub) # Usamos la función corregida
-    if not user:
+        
+    user = db.query(User).filter(User.email == sub).first()
+    if user is None:
         raise cred_exc
+        
     return user

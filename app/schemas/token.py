@@ -6,6 +6,8 @@ from typing import Optional
 class TokenResponse(BaseModel):
     status: str = "success"
     message: str
+    access_token: str
+    token_type: str = "bearer"
     token: str
 
 class TokenData(BaseModel):

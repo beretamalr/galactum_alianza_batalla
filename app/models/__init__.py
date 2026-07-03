@@ -1,1 +1,19 @@
-# Este archivo puede estar vacío
+from app.models.alianzas import *  # noqa: F401,F403
+from app.models.asteroid import *  # noqa: F401,F403
+from app.models.config_conversion_recipes import *  # noqa: F401,F403
+from app.models.config_craft_recipes import *  # noqa: F401,F403
+from app.models.config_room_costs import *  # noqa: F401,F403
+from app.models.config_unit_recipes import *  # noqa: F401,F403
+from app.models.costos_tripulantes import *  # noqa: F401,F403
+from app.models.crafting import *  # noqa: F401,F403
+from app.models.inventory import *  # noqa: F401,F403
+from app.models.job import *  # noqa: F401,F403
+from app.models.jugador import *  # noqa: F401,F403
+from app.models.misiones import *  # noqa: F401,F403
+from app.models.player_equipment import *  # noqa: F401,F403
+from app.models.player_units import *  # noqa: F401,F403
+from app.models.server import *  # noqa: F401,F403
+from app.models.ship_rooms import *  # noqa: F401,F403
+from app.models.ship import *  # noqa: F401,F403
+from app.models.tripulante import *  # noqa: F401,F403
+from app.models.user import *  # noqa: F401,F403

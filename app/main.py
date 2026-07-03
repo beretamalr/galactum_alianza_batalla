@@ -5,6 +5,7 @@ from fastapi.responses import RedirectResponse
 
 from app.db.base import Base           # <-- Base está en base.py
 from app.db.session import engine      # <-- engine está en session.py
+import app.models  # noqa: F401
 from app.api.routes import api_router
 
 # Esta línea asegura que las tablas se creen al iniciar
