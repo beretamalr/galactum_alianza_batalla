@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db.dependencies import get_db
+from app.models.alianzas import Alliance
 from app.schemas.alianzas import AlianzaCrearPeticion, AlianzaRespuesta
 from app.services import alianzas as alianzas_service
 
@@ -40,19 +41,50 @@ def crear_alianza(
 
 
 @router.get("/buscar", response_model=list[AlianzaRespuesta], name="Buscar Alianzas")
-def buscar_alianzas(search: str | None = None, db: Session = Depends(get_db)):
+def buscar_alianzas(
+    search: str | None = None,
+    q: str | None = None,
+    query: str | None = None,
+    texto: str | None = None,
+    db: Session = Depends(get_db),
+):
     """
     Retorna la lista de alianzas. Este endpoint sigue siendo público 
     para que los jugadores puedan buscar clanes desde el menú principal.
     """
     try:
-        alianzas = alianzas_service.get_alliances(db, search=search)
+        termino_busqueda = search or q or query or texto
+        alianzas = alianzas_service.get_alliances(db, search=termino_busqueda)
         return alianzas
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error al buscar alianzas: {str(e)}"
         )
+
+
+@router.post("/{alliance_id}/unirse", response_model=AlianzaRespuesta, name="Unirse a Alianza")
+def unirse_a_alianza(
+    alliance_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Vincula de forma persistente el jugador autenticado a una alianza.
+    Al volver a iniciar sesión, el vínculo se mantiene en la base de datos.
+    """
+    try:
+        alianza = alianzas_service.join_alliance(db, alliance_id, current_user)
+        return alianza
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al unirte a la alianza: {str(e)}"
+        )
+
+
 @router.get("/mi-alianza", response_model=AlianzaRespuesta | None, name="Ver mi Alianza")
 def ver_mi_alianza(
     db: Session = Depends(get_db),
@@ -64,13 +96,10 @@ def ver_mi_alianza(
     Perfecto para que Godot cargue el menú directo del clan.
     """
     try:
-        if not current_user.jugador or not hasattr(current_user.jugador, 'alliance_id'):
+        if not current_user.jugador or current_user.jugador.alliance_id is None:
             return None
             
         alliance_id = current_user.jugador.alliance_id
-        if not alliance_id:
-            return None
-            
         alianza = db.query(Alliance).filter(Alliance.id == alliance_id).first()
         return alianza
     except Exception as e:
