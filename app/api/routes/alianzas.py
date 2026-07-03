@@ -41,13 +41,20 @@ def crear_alianza(
 
 
 @router.get("/buscar", response_model=list[AlianzaRespuesta], name="Buscar Alianzas")
-def buscar_alianzas(search: str | None = None, db: Session = Depends(get_db)):
+def buscar_alianzas(
+    search: str | None = None,
+    q: str | None = None,
+    query: str | None = None,
+    texto: str | None = None,
+    db: Session = Depends(get_db),
+):
     """
     Retorna la lista de alianzas. Este endpoint sigue siendo público 
     para que los jugadores puedan buscar clanes desde el menú principal.
     """
     try:
-        alianzas = alianzas_service.get_alliances(db, search=search)
+        termino_busqueda = search or q or query or texto
+        alianzas = alianzas_service.get_alliances(db, search=termino_busqueda)
         return alianzas
     except Exception as e:
         raise HTTPException(

@@ -4,7 +4,108 @@ from app.models.alianzas import Alliance
 from app.models.user import User
 from app.schemas.alianzas import AlianzaCrearPeticion
 
+OFFICIAL_ALLIANCES = [
+    {
+        "name": "Legión Aurora",
+        "tag": "AURA",
+        "level": 9,
+        "members_count": 64,
+        "max_members": 150,
+        "power": "18450",
+        "lang": "ES",
+        "puntos_prestigio": 14200,
+    },
+    {
+        "name": "Nova Orion",
+        "tag": "NOVA",
+        "level": 7,
+        "members_count": 42,
+        "max_members": 100,
+        "power": "12850",
+        "lang": "ES",
+        "puntos_prestigio": 9800,
+    },
+    {
+        "name": "Cobalt Union",
+        "tag": "CBLT",
+        "level": 4,
+        "members_count": 18,
+        "max_members": 80,
+        "power": "6420",
+        "lang": "ES",
+        "puntos_prestigio": 3100,
+    },
+    {
+        "name": "Sideral Forge",
+        "tag": "FORG",
+        "level": 5,
+        "members_count": 26,
+        "max_members": 90,
+        "power": "8910",
+        "lang": "ES",
+        "puntos_prestigio": 4700,
+    },
+    {
+        "name": "Eclipse Vanguard",
+        "tag": "ECLP",
+        "level": 6,
+        "members_count": 31,
+        "max_members": 120,
+        "power": "10420",
+        "lang": "ES",
+        "puntos_prestigio": 6100,
+    },
+    {
+        "name": "Helios Pact",
+        "tag": "HELI",
+        "level": 3,
+        "members_count": 12,
+        "max_members": 60,
+        "power": "3880",
+        "lang": "ES",
+        "puntos_prestigio": 1900,
+    },
+    {
+        "name": "Iron Nebula",
+        "tag": "IRON",
+        "level": 8,
+        "members_count": 54,
+        "max_members": 150,
+        "power": "15900",
+        "lang": "ES",
+        "puntos_prestigio": 12100,
+    },
+    {
+        "name": "Solaris Core",
+        "tag": "SOLR",
+        "level": 2,
+        "members_count": 9,
+        "max_members": 50,
+        "power": "2240",
+        "lang": "ES",
+        "puntos_prestigio": 760,
+    }
+]
+
+
+def ensure_official_alliances(db: Session):
+    created = False
+
+    for alliance_data in OFFICIAL_ALLIANCES:
+        existing_alliance = db.query(Alliance).filter(
+            Alliance.name == alliance_data["name"],
+            Alliance.tag == alliance_data["tag"],
+        ).first()
+
+        if not existing_alliance:
+            db.add(Alliance(**alliance_data))
+            created = True
+
+    if created:
+        db.commit()
+
 def get_alliances(db: Session, search: str | None = None):
+    ensure_official_alliances(db)
     query = db.query(Alliance)
     if search:
         query = query.filter(Alliance.name.ilike(f"%{search}%"))
