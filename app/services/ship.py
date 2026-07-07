@@ -1,236 +1,520 @@
+import math
+import random
 import uuid
+
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Union
+
 from sqlalchemy.orm import Session, joinedload
+
+from app.models.jugador import Jugador
 from app.models.ship import Ship
 from app.models.ship_rooms import ShipRoom
 from app.models.tripulante import Tripulante
 from app.models.user import User
-from app.schemas.ship import ShipStatus, Position, ShipMoveResponseData
-import math
-import random
-from datetime import datetime, timezone, timedelta
-from typing import cast, Optional
 
-# Límites del mapa
+from app.schemas.ship import (
+    Position,
+    ShipMoveResponseData,
+    ShipStatus,
+)
+
+
 MAP_MIN_COORDINATE = -10000
 MAP_MAX_COORDINATE = 10000
 
+
+def _to_float(value, default: float = 0.0) -> float:
+    if value is None:
+        return default
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int(value, default: int = 0) -> int:
+    if value is None:
+        return default
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_aware_datetime(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+
+    return value
+
+
+def _normalize_user_id(user_id: Union[str, uuid.UUID]) -> uuid.UUID:
+    if isinstance(user_id, uuid.UUID):
+        return user_id
+
+    return uuid.UUID(str(user_id))
+
+
+def _sync_ship_position(
+    ship: Ship,
+    now: Optional[datetime] = None,
+) -> bool:
+    """
+    Actualiza posición si el viaje terminó o calcula la posición
+    intermedia cuando la nave se encuentra viajando.
+
+    Retorna True si modificó la nave.
+    """
+
+    if not ship.is_moving:
+        return False
+
+    now = now or datetime.now(timezone.utc)
+
+    start_time = _to_aware_datetime(ship.movement_start_time)
+    arrival_time = _to_aware_datetime(ship.estimated_arrival_time)
+
+    if (
+        start_time is None
+        or arrival_time is None
+        or ship.start_pos_x is None
+        or ship.start_pos_y is None
+        or ship.end_pos_x is None
+        or ship.end_pos_y is None
+    ):
+        return False
+
+    start_x = _to_float(ship.start_pos_x)
+    start_y = _to_float(ship.start_pos_y)
+    end_x = _to_float(ship.end_pos_x)
+    end_y = _to_float(ship.end_pos_y)
+
+    if now >= arrival_time:
+        ship.current_pos_x = end_x
+        ship.current_pos_y = end_y
+        ship.is_moving = False
+
+        ship.start_pos_x = None
+        ship.start_pos_y = None
+        ship.end_pos_x = None
+        ship.end_pos_y = None
+        ship.movement_start_time = None
+        ship.estimated_arrival_time = None
+
+        return True
+
+    total_seconds = (arrival_time - start_time).total_seconds()
+
+    if total_seconds <= 0:
+        return False
+
+    elapsed_seconds = (now - start_time).total_seconds()
+
+    progress = max(0.0, min(elapsed_seconds / total_seconds, 1.0))
+
+    ship.current_pos_x = start_x + ((end_x - start_x) * progress)
+    ship.current_pos_y = start_y + ((end_y - start_y) * progress)
+
+    return True
+
+
+def create_initial_ship(
+    db: Session,
+    user_id: uuid.UUID,
+    ship_name: Optional[str] = None,
+) -> Ship:
+    """
+    Crea la nave inicial de un usuario nuevo.
+
+    La función valida antes si el usuario ya tiene una nave para
+    evitar duplicaciones durante un registro repetido.
+    """
+
+    existing_ship = (
+        db.query(Ship)
+        .filter(Ship.owner_id == user_id)
+        .first()
+    )
+
+    if existing_ship is not None:
+        return existing_ship
+
+    initial_pos_x = float(
+        random.randint(
+            MAP_MIN_COORDINATE,
+            MAP_MAX_COORDINATE,
+        )
+    )
+
+    initial_pos_y = float(
+        random.randint(
+            MAP_MIN_COORDINATE,
+            MAP_MAX_COORDINATE,
+        )
+    )
+
+    new_ship = Ship(
+        owner_id=user_id,
+        name=ship_name or "Ares Explorer",
+        level=1,
+
+        energy_current=100,
+        energy_max=100,
+
+        shield_current=100,
+        shield_max=100,
+
+        hull_current=500,
+        hull_max=500,
+
+        cargo_capacity=1000,
+        extractor_level=1,
+        weapon_slots=2,
+        crew_slots=4,
+
+        is_moving=False,
+
+        current_pos_x=initial_pos_x,
+        current_pos_y=initial_pos_y,
+
+        start_pos_x=initial_pos_x,
+        start_pos_y=initial_pos_y,
+
+        speed=100.0,
+    )
+
+    db.add(new_ship)
+    db.flush()
+
+    return new_ship
+
+
+def get_or_create_ship(
+    db: Session,
+    user: User,
+) -> Ship:
+    """
+    Obtiene la nave de un usuario.
+
+    Usuarios registrados antes de esta mejora pueden no tener nave.
+    En ese caso se crea una automáticamente y queda persistida.
+    """
+
+    ship = (
+        db.query(Ship)
+        .filter(Ship.owner_id == user.id)
+        .first()
+    )
+
+    if ship is not None:
+        return ship
+
+    ship = create_initial_ship(
+        db=db,
+        user_id=user.id,
+        ship_name=f"Nave de {user.username}",
+    )
+
+    db.commit()
+    db.refresh(ship)
+
+    return ship
+
+
+def get_ship_state(
+    db: Session,
+    user: User,
+) -> dict:
+    """
+    Construye el contrato JSON para GET /ship/estado.
+    """
+
+    ship = get_or_create_ship(db, user)
+
+    position_changed = _sync_ship_position(ship)
+
+    if position_changed:
+        db.commit()
+        db.refresh(ship)
+
+    return {
+        "comandante": user.username,
+        "nave": {
+            "id": ship.id,
+            "nombre": ship.name,
+            "nivel": _to_int(ship.level, 1),
+
+            "energia_actual": _to_int(ship.energy_current, 100),
+            "energia_maxima": _to_int(ship.energy_max, 100),
+
+            "escudo_actual": _to_int(ship.shield_current, 100),
+            "escudo_maximo": _to_int(ship.shield_max, 100),
+
+            "casco_actual": _to_int(ship.hull_current, 500),
+            "casco_maximo": _to_int(ship.hull_max, 500),
+
+            "capacidad_carga": _to_int(ship.cargo_capacity, 1000),
+            "nivel_extractor": _to_int(ship.extractor_level, 1),
+            "espacios_armas": _to_int(ship.weapon_slots, 2),
+            "espacios_tripulacion": _to_int(ship.crew_slots, 4),
+
+            "posicion": {
+                "x": _to_float(ship.current_pos_x),
+                "y": _to_float(ship.current_pos_y),
+            },
+
+            "en_movimiento": bool(ship.is_moving),
+            "velocidad": _to_float(ship.speed, 100.0),
+        },
+    }
+
+
 def get_all_ships(db: Session):
     """
-    Obtiene el estado de todas las naves para el mapa.
+    Obtiene las naves existentes para dibujarlas en el mapa.
     """
-    ships = db.query(Ship).options(
-        joinedload(Ship.owner).joinedload(User.jugador)
-    ).all()
 
+    ships = (
+        db.query(Ship)
+        .options(
+            joinedload(Ship.owner).joinedload(User.jugador)
+        )
+        .all()
+    )
+
+    modified = False
     result = []
+
     for ship in ships:
-        nickname = "unknown"
-        if ship.owner and ship.owner.jugador:
+        if _sync_ship_position(ship):
+            modified = True
+
+        nickname = "Comandante desconocido"
+
+        if ship.owner is not None and ship.owner.jugador is not None:
             nickname = ship.owner.jugador.nickname
 
-        # Castings para evitar errores de linter
-        c_pos_x = cast(float, ship.current_pos_x)
-        c_pos_y = cast(float, ship.current_pos_y)
-        
-        current_pos = Position(x=c_pos_x, y=c_pos_y)
-        
-        # Validación segura de start_pos
-        start_pos = None
-        if ship.start_pos_x is not None and ship.start_pos_y is not None:
-            start_pos = Position(
-                x=cast(float, ship.start_pos_x), 
-                y=cast(float, ship.start_pos_y)
+        start_position = None
+        end_position = None
+
+        if (
+            ship.start_pos_x is not None
+            and ship.start_pos_y is not None
+        ):
+            start_position = Position(
+                x=_to_float(ship.start_pos_x),
+                y=_to_float(ship.start_pos_y),
             )
 
-        # Validación segura de end_pos
-        end_pos = None
-        if ship.end_pos_x is not None and ship.end_pos_y is not None:
-            end_pos = Position(
-                x=cast(float, ship.end_pos_x), 
-                y=cast(float, ship.end_pos_y)
+        if (
+            ship.end_pos_x is not None
+            and ship.end_pos_y is not None
+        ):
+            end_position = Position(
+                x=_to_float(ship.end_pos_x),
+                y=_to_float(ship.end_pos_y),
             )
 
         result.append(
             ShipStatus(
                 username=nickname,
-                isMoving=cast(bool, ship.is_moving),
-                currentPosition=current_pos,
-                startPosition=start_pos,
-                endPosition=end_pos,
-                movementStartTime=cast(Optional[datetime], ship.movement_start_time),
-                estimatedArrivalTime=cast(Optional[datetime], ship.estimated_arrival_time)
+                isMoving=bool(ship.is_moving),
+
+                currentPosition=Position(
+                    x=_to_float(ship.current_pos_x),
+                    y=_to_float(ship.current_pos_y),
+                ),
+
+                startPosition=start_position,
+                endPosition=end_position,
+
+                movementStartTime=ship.movement_start_time,
+                estimatedArrivalTime=ship.estimated_arrival_time,
             )
         )
+
+    if modified:
+        db.commit()
+
     return result
 
+
 def start_player_move(
-    db: Session, 
-    user_id: str,
-    target_pos: Position
+    db: Session,
+    user_id: Union[str, uuid.UUID],
+    target_pos: Position,
 ) -> ShipMoveResponseData:
     """
-    Inicia el movimiento de la nave y corrige la posición inicial.
-    Usa 'cast' explícito para satisfacer al linter (Pylance).
+    Inicia o redirige el viaje de una nave.
     """
-    
-    # 0. Limitar coordenadas (Clamp)
-    clamped_x = max(MAP_MIN_COORDINATE, min(target_pos.x, MAP_MAX_COORDINATE))
-    clamped_y = max(MAP_MIN_COORDINATE, min(target_pos.y, MAP_MAX_COORDINATE))
-    
-    clamped_target_pos = Position(x=clamped_x, y=clamped_y)
 
-    # 1. Encontrar la nave
-    ship = db.query(Ship).filter(Ship.owner_id == user_id).first()
-    
-    if not ship:
-        raise Exception("Ship not found for the current user")
-    
-    # --- CORRECCIÓN DE POSICIÓN PREVIA (Linter Friendly) ---
-    now = datetime.now(timezone.utc)
+    normalized_user_id = _normalize_user_id(user_id)
 
-    # 1. Extraemos y casteamos las variables primero.
-    mov_start = cast(Optional[datetime], ship.movement_start_time)
-    est_arrival = cast(Optional[datetime], ship.estimated_arrival_time)
-    start_x = cast(Optional[float], ship.start_pos_x)
-    end_x = cast(Optional[float], ship.end_pos_x)
-    start_y = cast(Optional[float], ship.start_pos_y)
-    end_y = cast(Optional[float], ship.end_pos_y)
-    is_moving = cast(bool, ship.is_moving)
-
-    # Ahora el IF usa variables tipadas correctamente
-    if mov_start and est_arrival and start_x is not None and end_x is not None:
-        
-        # --- FIX: Normalizar zonas horarias ---
-        if est_arrival.tzinfo is None:
-            est_arrival = est_arrival.replace(tzinfo=timezone.utc)
-
-        if mov_start.tzinfo is None:
-            mov_start = mov_start.replace(tzinfo=timezone.utc)
-        # --------------------------------------
-
-        # CASO 1: Viaje anterior finalizado
-        if now >= est_arrival:
-            # Agregamos # type: ignore para calmar a Pylance
-            ship.current_pos_x = end_x  # type: ignore
-            ship.current_pos_y = end_y  # type: ignore
-            ship.is_moving = False      # type: ignore
-        
-        # CASO 2: Cambio de rumbo en vuelo
-        elif is_moving:
-            total_duration = (est_arrival - mov_start).total_seconds()
-            elapsed_time = (now - mov_start).total_seconds()
-            
-            s_y = cast(float, start_y)
-            e_y = cast(float, end_y)
-
-            if total_duration > 0:
-                progress = elapsed_time / total_duration
-                current_x = start_x + (end_x - start_x) * progress
-                current_y = s_y + (e_y - s_y) * progress
-                
-                # Agregamos # type: ignore aquí también
-                ship.current_pos_x = current_x  # type: ignore
-                ship.current_pos_y = current_y  # type: ignore
-    
-    # -------------------------------------
-
-    # 2. Definir nuevo viaje
-    start_time = now
-    
-    # Usamos la posición actual corregida (y casteada) como punto de partida
-    current_x_val = cast(float, ship.current_pos_x)
-    current_y_val = cast(float, ship.current_pos_y)
-    
-    start_pos = Position(x=current_x_val, y=current_y_val)
-    
-    # 3. Calcular distancia
-    distance = math.sqrt(
-        (clamped_target_pos.x - start_pos.x) ** 2 + 
-        (clamped_target_pos.y - start_pos.y) ** 2
+    ship = (
+        db.query(Ship)
+        .filter(Ship.owner_id == normalized_user_id)
+        .first()
     )
-    
-    if distance == 0:
-        pass 
 
-    # Evitar división por cero en speed
-    speed_val = cast(Optional[float], ship.speed)
-    speed = float(speed_val) if speed_val and speed_val > 0 else 1.0
-    
+    if ship is None:
+        raise ValueError(
+            "No se encontró una nave para el usuario actual."
+        )
+
+    _sync_ship_position(ship)
+
+    clamped_x = max(
+        MAP_MIN_COORDINATE,
+        min(target_pos.x, MAP_MAX_COORDINATE),
+    )
+
+    clamped_y = max(
+        MAP_MIN_COORDINATE,
+        min(target_pos.y, MAP_MAX_COORDINATE),
+    )
+
+    start_position = Position(
+        x=_to_float(ship.current_pos_x),
+        y=_to_float(ship.current_pos_y),
+    )
+
+    end_position = Position(
+        x=clamped_x,
+        y=clamped_y,
+    )
+
+    distance = math.sqrt(
+        ((end_position.x - start_position.x) ** 2)
+        + ((end_position.y - start_position.y) ** 2)
+    )
+
+    speed = max(
+        _to_float(ship.speed, 100.0),
+        1.0,
+    )
+
     duration_seconds = distance / speed
-    
-    # 4. Calcular ETA
-    eta = start_time + timedelta(seconds=duration_seconds)
 
-    # 5. Guardar en BD (Estas líneas ya tenían el ignore y funcionaban bien)
-    ship.is_moving = True  # type: ignore
-    ship.start_pos_x = start_pos.x  # type: ignore
-    ship.start_pos_y = start_pos.y  # type: ignore
-    ship.end_pos_x = clamped_target_pos.x  # type: ignore
-    ship.end_pos_y = clamped_target_pos.y  # type: ignore
-    ship.movement_start_time = start_time  # type: ignore
-    ship.estimated_arrival_time = eta  # type: ignore
+    movement_start = datetime.now(timezone.utc)
+    estimated_arrival = movement_start + timedelta(
+        seconds=duration_seconds
+    )
+
+    ship.is_moving = True
+
+    ship.start_pos_x = start_position.x
+    ship.start_pos_y = start_position.y
+
+    ship.end_pos_x = end_position.x
+    ship.end_pos_y = end_position.y
+
+    ship.movement_start_time = movement_start
+    ship.estimated_arrival_time = estimated_arrival
 
     db.commit()
     db.refresh(ship)
 
-    # 6. Retorno de datos
     return ShipMoveResponseData(
-        startPosition=start_pos,
-        endPosition=clamped_target_pos,
-        movementStartTime=start_time,
-        estimatedArrivalTime=eta
+        startPosition=start_position,
+        endPosition=end_position,
+        movementStartTime=movement_start,
+        estimatedArrivalTime=estimated_arrival,
     )
 
-def get_player_ship_stats(db: Session, user_id: str):
-    """
-    Calcula estadísticas finales de la nave.
-    """
-    ship = db.query(Ship).filter(Ship.owner_id == user_id).first()
-    if not ship:
-        raise Exception("Nave no encontrada")
 
-    player_id = ship.owner.jugador.id # type: ignore
-    rooms = db.query(ShipRoom).filter(ShipRoom.player_id == player_id).all()
-    crew = db.query(Tripulante).filter(Tripulante.player_id == player_id).all()
+def get_player_ship_stats(
+    db: Session,
+    user_id: Union[str, uuid.UUID],
+) -> dict:
+    """
+    Retorna estadísticas de nave para el endpoint de jugador.
 
-    final_stats = {
-        "cargo_capacity": ship.cargo_capacity,
-        "shield_points": ship.shield_points,
-        "hull_points": ship.hull_points,
-        "impulse_speed": ship.speed,
-        "extractor_level": ship.extractor_level,
-        "weapon_slots": ship.weapon_slots,
-        "crew_slots": ship.crew_slots
-    }
+    Mantiene compatibilidad con /player/stats, evitando depender
+    de atributos comentados o inexistentes del modelo anterior.
+    """
+
+    normalized_user_id = _normalize_user_id(user_id)
+
+    ship = (
+        db.query(Ship)
+        .filter(Ship.owner_id == normalized_user_id)
+        .first()
+    )
+
+    if ship is None:
+        raise ValueError("Nave no encontrada.")
+
+    player = (
+        db.query(Jugador)
+        .filter(Jugador.user_id == normalized_user_id)
+        .first()
+    )
+
+    if player is None:
+        raise ValueError(
+            "Jugador no encontrado para la nave actual."
+        )
+
+    rooms = (
+        db.query(ShipRoom)
+        .filter(ShipRoom.player_id == player.id)
+        .all()
+    )
+
+    crew_count = (
+        db.query(Tripulante)
+        .filter(Tripulante.player_id == player.id)
+        .count()
+    )
+
+    cargo_capacity = _to_int(ship.cargo_capacity, 1000)
+    weapon_slots = _to_int(ship.weapon_slots, 2)
 
     for room in rooms:
-        if cast(str, room.room_id) == "Fabrica":
-            final_stats["cargo_capacity"] += cast(int, room.level) * 100
+        room_id = str(room.room_id).lower()
+        room_level = _to_int(room.level, 1)
 
-    for member in crew:
-        if cast(int, member.slot_id) == 1: 
-            final_stats["impulse_speed"] += cast(int, member.agilidad) * 5
-        
-        if cast(int, member.slot_id) == 2:
-            final_stats["extractor_level"] += cast(int, member.percepcion) // 10
+        if room_id == "fabrica":
+            cargo_capacity += room_level * 100
 
-    return final_stats
+        if room_id == "armeria":
+            weapon_slots += room_level
 
-def create_initial_ship(db: Session, user_id: uuid.UUID) -> Ship:
-    """
-    Crea nave inicial.
-    """
-    initial_pos_x = float(random.randint(MAP_MIN_COORDINATE, MAP_MAX_COORDINATE))
-    initial_pos_y = float(random.randint(MAP_MIN_COORDINATE, MAP_MAX_COORDINATE))
+    return {
+        "cargo_capacity": cargo_capacity,
 
-    new_ship = Ship(
-        owner_id=user_id,
-        is_moving=False,
-        current_pos_x=initial_pos_x,
-        current_pos_y=initial_pos_y,
-        start_pos_x=initial_pos_x,
-        start_pos_y=initial_pos_y,
-    )
+        "shield_points": _to_int(
+            ship.shield_current,
+            100,
+        ),
 
-    db.add(new_ship)
-    return new_ship
+        "hull_points": _to_int(
+            ship.hull_current,
+            500,
+        ),
+
+        "impulse_speed": _to_float(
+            ship.speed,
+            100.0,
+        ),
+
+        "extractor_level": _to_int(
+            ship.extractor_level,
+            1,
+        ),
+
+        "weapon_slots": weapon_slots,
+
+        "crew_slots": _to_int(
+            ship.crew_slots,
+            4,
+        ),
+
+        "crew_assigned": crew_count,
+    }

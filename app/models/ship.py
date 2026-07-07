@@ -1,37 +1,169 @@
-# app/models/ship.py - CORREGIDO
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
-from sqlalchemy import Column, Float, Boolean, ForeignKey, DateTime, Integer
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+)
 from sqlalchemy.orm import relationship
+
 from app.db.base import Base
+
 
 class Ship(Base):
     __tablename__ = "ships"
-    # Corrección: Se elimina la definición duplicada de 'id' y se mantiene la correcta (UUID).
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), unique=True, nullable=False)
-    is_moving = Column(Boolean, default=False)
-    current_pos_x = Column(Float)
-    current_pos_y = Column(Float)
-    start_pos_x = Column(Float, nullable=True)
-    start_pos_y = Column(Float, nullable=True)
-    end_pos_x = Column(Float, nullable=True)
-    end_pos_y = Column(Float, nullable=True)
 
-    # ¡¡NUEVAS COLUMNAS!!
-    movement_start_time = Column(DateTime, nullable=True)
-    estimated_arrival_time = Column(DateTime, nullable=True)
-    
-    speed = Column(Float, default=100.0) # Velocidad base de la nave (unidades/segundo)
-    
-    # --- Nuevos Atributos de Estadísticas Base ---
-    
-    # cargo_capacity = Column(Integer, default=1000) # Capacidad total de almacenamiento de recursos de la nave
-    # shield_points = Column(Integer, default=100) # Puntos de escudo de la nave
-    # hull_points = Column(Integer, default=500) # Puntos de vida estructurales del casco de la nave
-    # extractor_level = Column(Integer, default=1) # Representa la salud total de la nave después de que los escudos se agotan
-    # weapon_slots = Column(Integer, default=2) # 
-    # crew_slots = Column(Integer, default=4)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        index=True,
+    )
 
-    # Relación
-    owner = relationship("User", back_populates="ship")
+    owner_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    # Identidad de la nave
+    name = Column(
+        String(80),
+        nullable=False,
+        default="Ares Explorer",
+    )
+
+    level = Column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+    # Estado operativo visible en la pantalla Mi Nave
+    energy_current = Column(
+        Integer,
+        nullable=False,
+        default=100,
+    )
+
+    energy_max = Column(
+        Integer,
+        nullable=False,
+        default=100,
+    )
+
+    shield_current = Column(
+        Integer,
+        nullable=False,
+        default=100,
+    )
+
+    shield_max = Column(
+        Integer,
+        nullable=False,
+        default=100,
+    )
+
+    hull_current = Column(
+        Integer,
+        nullable=False,
+        default=500,
+    )
+
+    hull_max = Column(
+        Integer,
+        nullable=False,
+        default=500,
+    )
+
+    # Estadísticas base para evolución futura
+    cargo_capacity = Column(
+        Integer,
+        nullable=False,
+        default=1000,
+    )
+
+    extractor_level = Column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+    weapon_slots = Column(
+        Integer,
+        nullable=False,
+        default=2,
+    )
+
+    crew_slots = Column(
+        Integer,
+        nullable=False,
+        default=4,
+    )
+
+    # Estado de movimiento y mapa
+    is_moving = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+
+    current_pos_x = Column(
+        Float,
+        nullable=False,
+        default=0.0,
+    )
+
+    current_pos_y = Column(
+        Float,
+        nullable=False,
+        default=0.0,
+    )
+
+    start_pos_x = Column(
+        Float,
+        nullable=True,
+    )
+
+    start_pos_y = Column(
+        Float,
+        nullable=True,
+    )
+
+    end_pos_x = Column(
+        Float,
+        nullable=True,
+    )
+
+    end_pos_y = Column(
+        Float,
+        nullable=True,
+    )
+
+    movement_start_time = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    estimated_arrival_time = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    speed = Column(
+        Float,
+        nullable=False,
+        default=100.0,
+    )
+
+    owner = relationship(
+        "User",
+        back_populates="ship",
+    )
