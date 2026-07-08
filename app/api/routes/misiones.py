@@ -177,62 +177,98 @@ def reclamar_mision(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """
-    Entrega recompensas si la misión ya está completada.
-    """
-    jugador_id = _get_jugador_id(current_user)
+    try:
+        jugador_id = _get_jugador_id(current_user)
 
-    registro = (
-        db.query(MisionJugador)
-        .options(joinedload(MisionJugador.mision_maestra))
-        .filter(
-            MisionJugador.jugador_id == jugador_id,
-            MisionJugador.mision_id == mision_id,
-        )
-        .with_for_update()
-        .first()
-    )
-
-    if registro is None or registro.mision_maestra is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Misión no aceptada por este jugador.",
+        # IMPORTANTE:
+        # No usar joinedload + with_for_update aquí.
+        # PostgreSQL no permite FOR UPDATE sobre el lado nullable de un OUTER JOIN.
+        registro = (
+            db.query(MisionJugador)
+            .filter(
+                MisionJugador.jugador_id == jugador_id,
+                MisionJugador.mision_id == mision_id,
+            )
+            .with_for_update()
+            .first()
         )
 
-    if str(registro.estado) == "reclamada":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="La recompensa de esta misión ya fue reclamada.",
+        if registro is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Misión no aceptada por este jugador.",
+            )
+
+        mision_maestra = (
+            db.query(MisionMaestra)
+            .filter(MisionMaestra.mision_id == registro.mision_id)
+            .first()
         )
 
-    _actualizar_un_progreso(db, registro, jugador_id)
+        if mision_maestra is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="La misión maestra no existe.",
+            )
 
-    if str(registro.estado) != "completada":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="La misión aún no está completada.",
-        )
+        if str(registro.estado) == "reclamada":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La recompensa de esta misión ya fue reclamada.",
+            )
 
-    recompensas = _parse_recompensas(str(registro.mision_maestra.recompensa_data or "[]"))
-    recursos_ganados = _agregar_recompensas(db, jugador_id, recompensas)
-
-    registro.estado = "reclamada"
-    registro.reclamada_en = datetime.now(timezone.utc)
-
-    db.commit()
-    db.refresh(registro)
-
-    return {
-        "status": "success",
-        "mensaje": "Recompensa reclamada correctamente.",
-        "recursos_ganados": recursos_ganados,
-        "mision": _serializar_mision_jugador(
+        _actualizar_un_progreso(
             db=db,
             registro=registro,
             jugador_id=jugador_id,
-        ),
-    }
+        )
 
+        if str(registro.estado) != "completada":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La misión aún no está completada.",
+            )
+
+        recompensas = _parse_recompensas(
+            str(mision_maestra.recompensa_data or "[]")
+        )
+
+        if not recompensas:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Esta misión no tiene recompensas configuradas.",
+            )
+
+        recursos_ganados = _agregar_recompensas(
+            db=db,
+            jugador_id=jugador_id,
+            recompensas=recompensas,
+        )
+
+        registro.estado = "reclamada"
+        registro.reclamada_en = datetime.now(timezone.utc)
+
+        db.commit()
+        db.refresh(registro)
+
+        return {
+            "status": "success",
+            "mensaje": "Recompensa reclamada correctamente.",
+            "recursos_ganados": recursos_ganados,
+            "mision_id": registro.mision_id,
+            "estado": registro.estado,
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error interno al reclamar recompensa: " + str(error),
+        )
 
 def _get_jugador_id(current_user: User) -> int:
     if current_user.jugador is None:
