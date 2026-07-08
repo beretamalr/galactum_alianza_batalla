@@ -4,7 +4,7 @@ from app.models.job import Job
 from app.models.crafting import Recipe
 from app.models.ship_rooms import ShipRoom
 from app.services.recursos_service import verificar_y_consumir_recursos
-from app.services.ship_service import get_player_ship_stats
+from app.services.ship import get_player_ship_stats
 import json
 from datetime import datetime, timedelta, timezone
 from typing import cast
